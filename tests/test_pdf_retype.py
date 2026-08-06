@@ -287,6 +287,31 @@ def test_list_entries_at_the_root_has_no_parent_row():
     assert all(entry.label != "../" for entry in list_entries(Path("/")))
 
 
+def test_guided_mode_works_without_curses(monkeypatch):
+    """Windows ships no _curses in the stdlib, and the module must still load."""
+    import builtins
+    import importlib
+
+    import pdf_retype.interactive as interactive
+
+    real_import = builtins.__import__
+
+    def without_curses(name, *args, **kwargs):
+        if name == "curses":
+            raise ImportError("no _curses on this platform")
+        return real_import(name, *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(builtins, "__import__", without_curses)
+        reloaded = importlib.reload(interactive)
+        assert reloaded.curses is None
+        assert reloaded.can_draw_screens() is False  # falls back to prompts
+        assert reloaded.list_entries(Path.cwd()) is not None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(interactive)
+
+
 def test_describe_hit_mentions_page_font_and_similarity(doc):
     exact = describe_hit(find(doc, "Alfredo")[0])
     assert exact.startswith("p.1")

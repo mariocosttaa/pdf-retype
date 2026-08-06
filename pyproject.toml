@@ -19,7 +19,12 @@ classifiers = [
     "Topic :: Text Processing :: Fonts",
     "Topic :: Utilities",
 ]
-dependencies = ["PyMuPDF>=1.24"]
+dependencies = [
+    "PyMuPDF>=1.24",
+    # Windows has no _curses in the stdlib; without this the guided mode still
+    # runs, but falls back to numbered prompts instead of the list screens.
+    "windows-curses>=2.3; sys_platform == 'win32'",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]

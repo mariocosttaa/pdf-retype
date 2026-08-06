@@ -4,16 +4,21 @@ Everything here is stdlib. The list screens (file browser, match picker) run
 under ``curses`` so they can be driven with the arrow keys; typing text happens
 outside curses, where the terminal handles accents and editing properly.
 
-When there is no terminal to drive — a pipe, a CI job — the same screens fall
-back to plain numbered prompts, so the mode still works.
+When there is no terminal to drive — a pipe, a CI job, or a Windows install
+without ``windows-curses`` — the same screens fall back to plain numbered
+prompts, so the mode still works everywhere.
 """
 
 from __future__ import annotations
 
-import curses
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import curses
+except ImportError:  # Windows ships no _curses unless windows-curses is installed
+    curses = None
 
 import fitz
 
@@ -67,8 +72,9 @@ def _human(size: int) -> str:
     return f"{size:.1f} MB"
 
 
-def has_tty() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
+def can_draw_screens() -> bool:
+    """Whether the list screens can run: a real terminal, and curses to drive it."""
+    return curses is not None and sys.stdin.isatty() and sys.stdout.isatty()
 
 
 # ------------------------------------------------------------------ curses menu
@@ -105,16 +111,6 @@ def _draw(stdscr, title: str, footer: str, rows: list[str], cursor: int, top: in
     return top
 
 
-_ESCAPE_KEYS = {
-    ord("A"): curses.KEY_UP,
-    ord("B"): curses.KEY_DOWN,
-    ord("C"): curses.KEY_RIGHT,
-    ord("D"): curses.KEY_LEFT,
-    ord("H"): curses.KEY_HOME,
-    ord("F"): curses.KEY_END,
-}
-
-
 def _read_key(stdscr) -> int:
     """One keypress, with raw arrow sequences folded into curses key codes.
 
@@ -138,7 +134,15 @@ def _read_key(stdscr) -> int:
         stdscr.timeout(-1)
 
     if second in (ord("["), ord("O")):
-        return _ESCAPE_KEYS.get(third, -1)
+        arrows = {
+            ord("A"): curses.KEY_UP,
+            ord("B"): curses.KEY_DOWN,
+            ord("C"): curses.KEY_RIGHT,
+            ord("D"): curses.KEY_LEFT,
+            ord("H"): curses.KEY_HOME,
+            ord("F"): curses.KEY_END,
+        }
+        return arrows.get(third, -1)
     return 27
 
 
@@ -189,7 +193,7 @@ def _menu(stdscr, title: str, rows: list[str], footer: str,
 
 def browse(start: Path) -> Path | None:
     """Walk the filesystem and return the chosen PDF."""
-    if not has_tty():
+    if not can_draw_screens():
         return _browse_plain(start)
     try:
         return curses.wrapper(_browse_curses, start)
@@ -278,7 +282,7 @@ def choose_hits(hits, term: str) -> list[int] | None:
     rows = [describe_hit(hit) for hit in hits]
     marks = set(range(len(hits)))
 
-    if not has_tty():
+    if not can_draw_screens():
         return list(marks)
     try:
         return curses.wrapper(_choose_curses, rows, marks, term)
