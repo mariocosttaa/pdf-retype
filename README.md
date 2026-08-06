@@ -264,7 +264,7 @@ falsify them. Use it on documents you have the right to change.
 
 ```bash
 pip install -e ".[dev]"
-pytest                                       # 47 tests
+pytest                                       # 48 tests
 python examples/make_sample.py sample.pdf    # a PDF to experiment on
 ```
 
