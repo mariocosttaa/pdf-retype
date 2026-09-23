@@ -41,6 +41,12 @@ def doc():
         ("TimesNewRomanPS-BoldMT", "Times New Roman", 700, False),
         ("Geist-ExtraLight", "Geist", 200, False),
         ("Helvetica", "Helvetica", 400, False),
+        # The style word is written in the document's own language often enough
+        # to matter: Word in Portuguese calls Arial's bold cut "ArialNegrito".
+        ("ArialNegrito", "Arial", 700, False),
+        ("Arial-Itálico", "Arial", 400, True),
+        ("HelveticaGrassetto", "Helvetica", 700, False),
+        ("Verdana,BoldItalic", "Verdana", 700, True),
     ],
 )
 def test_parse_font_name(raw, family, weight, italic):
@@ -60,6 +66,30 @@ def test_serif_detection_reads_the_font_program():
         pytest.skip("system fonts unavailable")
     assert serif_from_program(times.read_bytes()) is True
     assert serif_from_program(arial.read_bytes()) is False
+
+
+def test_span_flags_rescue_a_weight_the_name_never_spelled_out():
+    """No table holds every language's word for bold, so the flags get a vote."""
+    ident = parse_font_name("ArialGrueso")
+    assert (ident.family, ident.weight) == ("Arial Grueso", 400)
+    assert ident.styled(bold=True, italic=False).weight == 700
+    # An explicit weight is evidence too, and outranks a flag that disagrees.
+    assert parse_font_name("Geist-ExtraLight").styled(True, False).weight == 200
+
+
+def test_a_localised_bold_name_still_draws_bold(doc):
+    """The bug this guards: "ArialNegrito" read as a family called "Arial
+    Negrito" matches plain Arial on disk, and the replacement loses its weight.
+    """
+    style = {
+        "raw_font": "ArialNegrito", "font": "ArialNegrito", "size": 9.6,
+        "bold": True, "italic": False, "serif": False, "monospace": False,
+    }
+    spec, _ = resolve_font(
+        doc, doc[0], style, "23-09-2026",
+        prefer_embedded=False, allow_download=False,
+    )
+    assert spec.fontname == "hebo"  # Helvetica-Bold, not the regular cut
 
 
 def test_pdf_serif_flag_does_not_override_a_sans_name():

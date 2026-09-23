@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import subprocess
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -24,6 +25,11 @@ from pathlib import Path
 FONT_EXTENSIONS = (".ttf", ".otf", ".ttc", ".otc", ".pfb")
 
 # Style words found in font names, mapped to CSS weights.
+#
+# The localised ones are not a nicety: an office suite running in Portuguese
+# names Arial's bold cut "ArialNegrito", and a name whose style word we do not
+# recognise is read as family "Arial Negrito" at the default weight — so the
+# replacement comes back in the regular cut, silently un-bolding the text.
 _WEIGHT_WORDS = [
     ("extrablack", 950), ("ultrablack", 950),
     ("extrabold", 800), ("ultrabold", 800),
@@ -32,6 +38,8 @@ _WEIGHT_WORDS = [
     ("semilight", 350),
     ("black", 900), ("heavy", 900),
     ("bold", 700),
+    ("negrito", 700), ("negrita", 700),  # pt, es
+    ("grassetto", 700), ("gras", 700), ("fett", 700),  # it, fr, de
     ("medium", 500),
     ("regular", 400), ("normal", 400),
     ("light", 300),
@@ -39,10 +47,19 @@ _WEIGHT_WORDS = [
 ]
 # Deliberately absent: "roman" and "book" — they belong to family names far more
 # often than they signal a weight (Times New Roman, Bookman).
-_ITALIC_WORDS = ("italic", "oblique", "it")
+_ITALIC_WORDS = (
+    "italic", "oblique", "it",
+    "italico", "italique", "cursiva", "corsivo", "kursiv",
+)
 
 # Foundry initials some producers glue onto the family name.
 _FOUNDRY_SUFFIXES = ("mt", "ps", "psmt", "lt", "tt", "bt", "itc")
+
+# camelCase boundaries: "GTFlexaBold" -> GT | Flexa | Bold. We split on the
+# transitions rather than matching runs of [A-Za-z] so that an accented style
+# word survives whole — "Itálico" chopped at the accent leaves "It", which the
+# table below reads as italic.
+_CAMEL_BREAK = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 _CDN = "https://cdn.jsdelivr.net/fontsource/fonts"
 _API = "https://api.fontsource.org/v1/fonts"
@@ -72,6 +89,28 @@ class FontIdent:
             bits.append("italic")
         return " ".join(bits)
 
+    def styled(self, bold: bool, italic: bool) -> "FontIdent":
+        """Fold in what the *span* reports, for names that never said it.
+
+        ``_WEIGHT_WORDS`` cannot hold every language's word for bold, and a
+        producer is free to invent one. When the name yielded no weight at all,
+        the renderer's own flags are better evidence than the 400 default —
+        without this, an unrecognised word costs the text its weight.
+        """
+        weight = 700 if bold and self.weight == 400 else self.weight
+        return FontIdent(self.family, weight, self.italic or italic)
+
+
+def _fold(text: str) -> str:
+    """Lowercase with the accents taken off, for comparing style words.
+
+    Producers spell the same word either way, so "Itálico" and "Italico" have
+    to land on the same entry. Only the comparison is folded — the family keeps
+    its own spelling.
+    """
+    decomposed = unicodedata.normalize("NFD", text.lower())
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
 
 def parse_font_name(basefont: str) -> FontIdent:
     """``AAAAAB+GTFlexa-Bold`` -> ``FontIdent('GT Flexa', 700, False)``."""
@@ -82,18 +121,20 @@ def parse_font_name(basefont: str) -> FontIdent:
     if "+" in name:
         head, _, tail = name.partition("+")
         name = head if head == tail else name.replace("+", " ")
-    name = name.split(",")[0]
+    # "/Verdana,Bold" is how a PDF names a non-embedded TrueType cut: the style
+    # sits after the comma, so it is a word to read, not a tail to cut off.
+    name = name.replace(",", " ")
 
     tokens = [t for t in re.split(r"[-_\s]+", name) if t]
     # Split camelCase inside each token so "GTFlexaBold" separates too.
     parts: list[str] = []
     for token in tokens:
-        parts.extend(re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+", token) or [token])
+        parts.extend(p for p in _CAMEL_BREAK.split(token) if p)
 
     weight = 400
     italic = False
     family_parts: list[str] = []
-    lowered = [p.lower() for p in parts]
+    lowered = [_fold(p) for p in parts]
 
     index = 0
     while index < len(parts):

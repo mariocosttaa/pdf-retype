@@ -205,17 +205,24 @@ def spans_in_rect(page: fitz.Page, rect: fitz.Rect) -> list[dict]:
 
 
 def describe_span(span: dict) -> dict:
-    """Font attributes of a span, in plain values."""
+    """Font attributes of a span, in plain values.
+
+    Weight and slant come from the flags *or* the name, because either can be
+    the only one to know: a producer may leave the bold bit clear on a face
+    called ``Inter-Bold``, or set it on a face called ``ArialNegrito`` whose
+    name we would otherwise have to read in Portuguese. ``parse_font_name``
+    does the reading, so one table serves both this and the font lookup.
+    """
     flags = span["flags"]
+    ident = parse_font_name(span["font"])
     return {
         "font": strip_subset_tag(span["font"]),
         "raw_font": span["font"],
         "size": round(span["size"], 2),
         "color": fitz.sRGB_to_pdf(span["color"]),
         "color_hex": f"#{span['color']:06x}",
-        "bold": bool(flags & FLAG_BOLD) or "bold" in span["font"].lower(),
-        "italic": bool(flags & FLAG_ITALIC)
-        or any(t in span["font"].lower() for t in ("italic", "oblique")),
+        "bold": bool(flags & FLAG_BOLD) or ident.weight >= 600,
+        "italic": bool(flags & FLAG_ITALIC) or ident.italic,
         "serif": bool(flags & FLAG_SERIF),
         "monospace": bool(flags & FLAG_MONOSPACE),
     }
@@ -333,7 +340,7 @@ def resolve_font(
     if forced:
         return FontSpec(forced, None, "forced", origin, f"forced {forced}"), warnings
 
-    ident = parse_font_name(origin)
+    ident = parse_font_name(origin).styled(style["bold"], style["italic"])
 
     if prefer_embedded:
         buffer = extract_embedded(doc, page, origin)
