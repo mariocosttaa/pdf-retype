@@ -155,25 +155,20 @@ def _fit_size(spec: FontSpec, text: str, size: float, box: float, room: float,
             f"does not fit even at {floor:.1f}pt (the floor set by --min-ratio); it will overflow"
         )
         return floor, warnings
-    warnings.append(f"shrunk from {size:.1f}pt to {scaled:.1f}pt to fit")
+    if round(scaled, 1) < round(size, 1):  # a shrink too small to see is not news
+        warnings.append(f"shrunk from {size:.1f}pt to {scaled:.1f}pt to fit")
     return scaled, warnings
 
 
-_ROUNDTRIP_CACHE: dict[tuple[str, str], bool] = {}
+_ROUNDTRIP_CACHE: dict[tuple[str, str], str] = {}
 
 
-def writes_cleanly(spec: FontSpec, text: str) -> bool:
-    """Whether drawing ``text`` extracts back as the same characters.
+def _extracted(spec: FontSpec, text: str) -> str:
+    """``text`` drawn with ``spec``, then read back out of the PDF.
 
-    Some fonts map one glyph to both U+0020 and U+00A0. MuPDF then records the
-    no-break space in the reverse mapping, and the replacement — while looking
-    perfect — comes back out of the PDF as ``Mariana\\xa0Pereira``, which no
-    longer matches a search for "Mariana Pereira". Cheaper to find out by
-    drawing it once on a throwaway page than to guess from the font tables.
+    Cheaper to find out by drawing it once on a throwaway page than to guess
+    from the font tables.
     """
-    if " " not in text:
-        return True
-
     key = (spec.fontname, text)
     if key not in _ROUNDTRIP_CACHE:
         probe = fitz.open()
@@ -181,9 +176,40 @@ def writes_cleanly(spec: FontSpec, text: str) -> bool:
         writer = fitz.TextWriter(page.rect)
         writer.append(fitz.Point(20, 40), text, font=spec.font(), fontsize=12)
         writer.write_text(page)
-        _ROUNDTRIP_CACHE[key] = page.get_text().strip() == text.strip()
+        _ROUNDTRIP_CACHE[key] = page.get_text().strip()
         probe.close()
     return _ROUNDTRIP_CACHE[key]
+
+
+def writes_cleanly(spec: FontSpec, text: str) -> bool:
+    """Whether drawing ``text`` extracts back as the same characters.
+
+    Fonts routinely point several codepoints at one glyph — U+0020 and U+00A0
+    share a space, U+002D and U+00AD share a hyphen — and MuPDF records whichever
+    one it meets first in the reverse mapping. The replacement then looks perfect
+    on the page but comes back out of the PDF as ``Mariana\\xa0Pereira`` or
+    ``23\\xad09\\xad2026``, which no longer matches a search for what was typed.
+    """
+    return _extracted(spec, text) == text.strip()
+
+
+def roundtrip_warning(spec: FontSpec, text: str) -> str | None:
+    """What to tell the user when the text will not extract as they typed it.
+
+    Only worth saying once the word-by-word rescue in ``_append_text`` has had
+    its chance: that fixes an ambiguous *space*, but nothing can be split around
+    a hyphen sitting inside a word.
+    """
+    if not text or writes_cleanly(spec, text):
+        return None
+    words = [word for word in text.split(" ") if word]
+    if [_extracted(spec, word) for word in words] == words:
+        return None
+    got = " ".join(_extracted(spec, word) for word in words)
+    return (
+        f"{spec.name} points several characters at one glyph: the text will look"
+        f" right but extracts as {got!r}, so a search for it will not match"
+    )
 
 
 def _append_text(writer: fitz.TextWriter, spec: FontSpec, point: fitz.Point,
@@ -239,7 +265,11 @@ def plan_hits(
         size, fit_warnings = _fit_size(
             spec, new_text, size, hit.rect.width, room, fit, min_ratio
         )
-        plans.append((hit, spec, size, warnings + fit_warnings))
+        warnings = warnings + fit_warnings
+        damage = roundtrip_warning(spec, new_text)
+        if damage:
+            warnings.append(damage)
+        plans.append((hit, spec, size, warnings))
     return plans
 
 

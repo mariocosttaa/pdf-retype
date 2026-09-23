@@ -6,13 +6,14 @@ import pytest
 
 from pdf_retype.cli import parse_pages, save_pdf
 from pdf_retype.fontlib import parse_font_name, serif_from_program
-from pdf_retype.fonts import base14_for, list_fonts
+from pdf_retype.fonts import base14_for, list_fonts, resolve_font
 from pdf_retype.interactive import describe_hit, list_entries
 from pdf_retype.replace import (
     free_width,
     parse_color,
     redaction_rect,
     replace_hits,
+    roundtrip_warning,
 )
 from pdf_retype.search import find, normalize, similarity
 
@@ -184,6 +185,29 @@ def test_replaced_text_can_be_found_again(doc):
     assert "\xa0" not in doc[0].get_text()
     assert doc[0].search_for("Mariana Pereira")
     assert find(doc, "Mariana Pereira")
+
+
+def test_a_glyph_shared_by_two_codepoints_is_reported(doc):
+    """Arial points both U+002D and U+00AD at one hyphen glyph, and MuPDF writes
+    the soft hyphen into the reverse mapping. Nothing can be split around a
+    hyphen inside a word, so the least we owe the user is to say so."""
+    arial = Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
+    if not arial.is_file():
+        pytest.skip("system fonts unavailable")
+
+    changes = replace_hits(
+        doc, find(doc, "XRBYVW"), "23-09-2026", font_file=str(arial)
+    )
+    assert any("search for it will not match" in w for w in changes[0].warnings)
+    assert not doc[0].search_for("23-09-2026")  # the damage the warning names
+
+    # A base-14 face maps them apart, so that route needs no warning at all.
+    style = {
+        "raw_font": "Helvetica-Bold", "font": "Helvetica-Bold", "size": 12,
+        "bold": True, "italic": False, "serif": False, "monospace": False,
+    }
+    spec, _ = resolve_font(doc, doc[0], style, "23-09-2026", prefer_embedded=False)
+    assert roundtrip_warning(spec, "23-09-2026") is None
 
 
 def test_multiple_spaces_are_preserved(doc):
